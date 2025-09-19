@@ -30,6 +30,8 @@ def get_crypto_data(symbol, interval='1d', limit=100):
         # Fallback to Yahoo Finance if Binance fails
         yf_symbol = symbol.replace("/", "-")
         df = yf.download(yf_symbol, period='3mo', interval='1d')
+        if df.empty:
+            return pd.DataFrame()  # return empty DataFrame
         df = df[['Open','High','Low','Close','Volume']]
         return df
 
@@ -39,58 +41,82 @@ def get_crypto_data(symbol, interval='1d', limit=100):
 coins = ["BTC/USDT","ETH/USDT","BNB/USDT","XRP/USDT","ADA/USDT",
          "SOL/USDT","DOGE/USDT","DOT/USDT","MATIC/USDT","LTC/USDT"]
 
-st.subheader("Top 10 Coins Analysis")
+st.subheader("Top 10 Coins Analysis with Top 3 Highlights")
 analysis_results = []
 
 for coin in coins:
     df = get_crypto_data(coin)
     
-    # Simple signal example: Close > Open = BUY, else SHORT
+    if df.empty:
+        analysis_results.append({
+            "Coin": coin,
+            "Last Close": "No data",
+            "Signal": "N/A",
+            "Change (%)": "N/A",
+            "DataFrame": None
+        })
+        continue
+    
     last_row = df.iloc[-1]
     signal = "BUY" if last_row['Close'] > last_row['Open'] else "SHORT"
+    prev_close = df.iloc[-2]['Close'] if len(df) > 1 else last_row['Open']
+    change_percent = ((last_row['Close'] - prev_close) / prev_close) * 100
+    
     analysis_results.append({
         "Coin": coin,
-        "Last Close": last_row['Close'],
-        "Signal": signal
+        "Last Close": round(last_row['Close'], 4),
+        "Signal": signal,
+        "Change (%)": round(change_percent, 2),
+        "DataFrame": df
     })
 
-st.table(pd.DataFrame(analysis_results))
+df_analysis = pd.DataFrame(analysis_results)
+
+# Filter out coins with no data
+df_analysis_valid = df_analysis[df_analysis["Change (%)"] != "N/A"]
+
+# Highlight Top 3 coins
+top3 = df_analysis_valid.sort_values(by="Change (%)", ascending=False).head(3)
+
+st.table(df_analysis.drop(columns=["DataFrame"]))
+st.markdown("### 🔥 Top 3 Coins to Watch Now")
+st.table(top3.drop(columns=["DataFrame"]))
 
 # ------------------------------
-# Choose a coin for charts
+# Automatically show charts for Top 3 coins
 # ------------------------------
-st.subheader("Detailed Coin Chart")
-selected_coin = st.selectbox("Select a coin for chart", coins)
-df_chart = get_crypto_data(selected_coin)
+st.subheader("Charts for Top 3 Coins")
 
-# ------------------------------
-# Candlestick Chart
-# ------------------------------
-st.markdown("### Candlestick Chart")
-try:
-    mpf.plot(
-        df_chart,
-        type='candle',
-        volume=True,
-        style='yahoo',
-        title=f'{selected_coin} Candlestick Chart',
-        show_nontrading=False
-    )
-except Exception as e:
-    st.error(f"Error displaying candlestick chart: {e}")
-
-# ------------------------------
-# Close Price Line Chart
-# ------------------------------
-st.markdown("### Close Price Chart")
-try:
-    fig, ax = plt.subplots(figsize=(12,6))
-    ax.plot(df_chart['Close'], label='Close Price', color='blue')  # 1D series
-    ax.set_title(f'{selected_coin} Close Price')
-    ax.set_xlabel('Date')
-    ax.set_ylabel('Price')
-    ax.legend()
-    ax.grid(True)
-    st.pyplot(fig)
-except Exception as e:
-    st.error(f"Error displaying line chart: {e}")
+for idx, row in top3.iterrows():
+    coin = row['Coin']
+    df_chart = row['DataFrame']
+    
+    if df_chart is None or df_chart.empty:
+        st.error(f"No data available for {coin}")
+        continue
+    
+    st.markdown(f"### {coin} Candlestick Chart")
+    try:
+        mpf.plot(
+            df_chart,
+            type='candle',
+            volume=True,
+            style='yahoo',
+            title=f'{coin} Candlestick Chart',
+            show_nontrading=False
+        )
+    except Exception as e:
+        st.error(f"Error displaying candlestick chart for {coin}: {e}")
+    
+    st.markdown(f"### {coin} Close Price Chart")
+    try:
+        fig, ax = plt.subplots(figsize=(12,6))
+        ax.plot(df_chart['Close'], label='Close Price', color='blue')
+        ax.set_title(f'{coin} Close Price')
+        ax.set_xlabel('Date')
+        ax.set_ylabel('Price')
+        ax.legend()
+        ax.grid(True)
+        st.pyplot(fig)
+    except Exception as e:
+        st.error(f"Error displaying line chart for {coin}: {e}")
