@@ -20,20 +20,26 @@ st.markdown("Spot & Futures Crypto Analysis | Buy/Short Signals")
 # ------------------------------
 def get_crypto_data(symbol, interval='1d', limit=100):
     try:
+        # Try Binance first
         binance = ccxt.binance()
         ohlcv = binance.fetch_ohlcv(symbol, timeframe=interval, limit=limit)
         df = pd.DataFrame(ohlcv, columns=['timestamp', 'Open', 'High', 'Low', 'Close', 'Volume'])
         df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
         df.set_index('timestamp', inplace=True)
         return df
-    except Exception as e:
-        # Fallback to Yahoo Finance if Binance fails
-        yf_symbol = symbol.replace("/", "-")
-        df = yf.download(yf_symbol, period='3mo', interval='1d')
-        if df.empty:
-            return pd.DataFrame()  # return empty DataFrame
-        df = df[['Open','High','Low','Close','Volume']]
-        return df
+    except Exception as e_binance:
+        # Binance failed, try Yahoo
+        try:
+            yf_symbol = symbol.replace("/", "-")
+            df = yf.download(yf_symbol, period='3mo', interval='1d')
+            if df.empty:
+                return pd.DataFrame()
+            df = df[['Open','High','Low','Close','Volume']]
+            return df
+        except Exception as e_yf:
+            # Both Binance and Yahoo failed → return empty DataFrame
+            print(f"Failed to fetch data for {symbol}: Binance error: {e_binance}, Yahoo error: {e_yf}")
+            return pd.DataFrame()
 
 # ------------------------------
 # Top 10 coins to analyze
