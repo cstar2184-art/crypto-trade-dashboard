@@ -1,61 +1,96 @@
-# crypto_trade_analysis.py
+# crypto_trade_dashboard.py
 
+import streamlit as st
 import pandas as pd
-import numpy as np
-import ta
+import yfinance as yf
+import ccxt
+import matplotlib.pyplot as plt
+import mplfinance as mpf
+from datetime import datetime
 
+# ------------------------------
+# Streamlit page config
+# ------------------------------
+st.set_page_config(page_title="CryptoSage Ultra Pro", layout="wide")
+st.title("💹 CryptoSage Ultra Pro - PRO")
+st.markdown("Spot & Futures Crypto Analysis | Buy/Short Signals")
 
-# ==============================
-# Compute Technical Indicators
-# ==============================
-def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Takes OHLCV dataframe and adds indicators:
-    RSI, MACD, EMA20, SMA50, Bollinger Bands
-    """
+# ------------------------------
+# Function to fetch crypto data
+# ------------------------------
+def get_crypto_data(symbol, interval='1d', limit=100):
+    try:
+        binance = ccxt.binance()
+        ohlcv = binance.fetch_ohlcv(symbol, timeframe=interval, limit=limit)
+        df = pd.DataFrame(ohlcv, columns=['timestamp', 'Open', 'High', 'Low', 'Close', 'Volume'])
+        df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+        df.set_index('timestamp', inplace=True)
+        return df
+    except Exception as e:
+        # Fallback to Yahoo Finance if Binance fails
+        yf_symbol = symbol.replace("/", "-")
+        df = yf.download(yf_symbol, period='3mo', interval='1d')
+        df = df[['Open','High','Low','Close','Volume']]
+        return df
 
-    # ✅ Make sure column names match
-    if "Close" not in df.columns:
-        raise ValueError(f"Expected 'Close' in dataframe, but got: {df.columns}")
+# ------------------------------
+# Top 10 coins to analyze
+# ------------------------------
+coins = ["BTC/USDT","ETH/USDT","BNB/USDT","XRP/USDT","ADA/USDT",
+         "SOL/USDT","DOGE/USDT","DOT/USDT","MATIC/USDT","LTC/USDT"]
 
-    # RSI
-    df["RSI"] = ta.momentum.RSIIndicator(df["Close"], window=14).rsi()
+st.subheader("Top 10 Coins Analysis")
+analysis_results = []
 
-    # MACD
-    macd = ta.trend.MACD(df["Close"])
-    df["MACD"] = macd.macd()
-    df["MACD_Signal"] = macd.macd_signal()
-    df["MACD_Hist"] = macd.macd_diff()
+for coin in coins:
+    df = get_crypto_data(coin)
+    
+    # Simple signal example: Close > Open = BUY, else SHORT
+    last_row = df.iloc[-1]
+    signal = "BUY" if last_row['Close'] > last_row['Open'] else "SHORT"
+    analysis_results.append({
+        "Coin": coin,
+        "Last Close": last_row['Close'],
+        "Signal": signal
+    })
 
-    # EMA / SMA
-    df["EMA20"] = ta.trend.EMAIndicator(df["Close"], window=20).ema_indicator()
-    df["SMA50"] = ta.trend.SMAIndicator(df["Close"], window=50).sma_indicator()
+st.table(pd.DataFrame(analysis_results))
 
-    # Bollinger Bands
-    bb = ta.volatility.BollingerBands(df["Close"], window=20, window_dev=2)
-    df["BB_High"] = bb.bollinger_hband()
-    df["BB_Low"] = bb.bollinger_lband()
+# ------------------------------
+# Choose a coin for charts
+# ------------------------------
+st.subheader("Detailed Coin Chart")
+selected_coin = st.selectbox("Select a coin for chart", coins)
+df_chart = get_crypto_data(selected_coin)
 
-    return df
+# ------------------------------
+# Candlestick Chart
+# ------------------------------
+st.markdown("### Candlestick Chart")
+try:
+    mpf.plot(
+        df_chart,
+        type='candle',
+        volume=True,
+        style='yahoo',
+        title=f'{selected_coin} Candlestick Chart',
+        show_nontrading=False
+    )
+except Exception as e:
+    st.error(f"Error displaying candlestick chart: {e}")
 
-
-# ==============================
-# Generate Buy/Sell Signals
-# ==============================
-def generate_signals(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Uses indicators to generate Buy / Sell signals
-    """
-
-    signals = []
-
-    for i in range(len(df)):
-        if df["RSI"].iloc[i] < 30 and df["MACD"].iloc[i] > df["MACD_Signal"].iloc[i]:
-            signals.append("BUY")
-        elif df["RSI"].iloc[i] > 70 and df["MACD"].iloc[i] < df["MACD_Signal"].iloc[i]:
-            signals.append("SELL")
-        else:
-            signals.append("HOLD")
-
-    df["Signal"] = signals
-    return df
+# ------------------------------
+# Close Price Line Chart
+# ------------------------------
+st.markdown("### Close Price Chart")
+try:
+    fig, ax = plt.subplots(figsize=(12,6))
+    ax.plot(df_chart['Close'], label='Close Price', color='blue')  # 1D series
+    ax.set_title(f'{selected_coin} Close Price')
+    ax.set_xlabel('Date')
+    ax.set_ylabel('Price')
+    ax.legend()
+    ax.grid(True)
+    st.pyplot(fig)
+except Exception as e:
+    st.error(f"Error displaying line chart: {e}")
