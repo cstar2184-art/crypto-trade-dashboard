@@ -2,7 +2,6 @@
 
 import streamlit as st
 import pandas as pd
-import yfinance as yf
 import ccxt
 import matplotlib.pyplot as plt
 import mplfinance as mpf
@@ -16,30 +15,25 @@ st.title("💹 CryptoSage Ultra Pro - PRO")
 st.markdown("Spot & Futures Crypto Analysis | Buy/Short Signals")
 
 # ------------------------------
+# Binance API setup
+# ------------------------------
+binance = ccxt.binance({
+    'enableRateLimit': True
+})
+
+# ------------------------------
 # Function to fetch crypto data
 # ------------------------------
 def get_crypto_data(symbol, interval='1d', limit=100):
     try:
-        # Try Binance first
-        binance = ccxt.binance()
         ohlcv = binance.fetch_ohlcv(symbol, timeframe=interval, limit=limit)
         df = pd.DataFrame(ohlcv, columns=['timestamp', 'Open', 'High', 'Low', 'Close', 'Volume'])
         df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
         df.set_index('timestamp', inplace=True)
         return df
-    except Exception as e_binance:
-        # Binance failed, try Yahoo
-        try:
-            yf_symbol = symbol.replace("/", "-")
-            df = yf.download(yf_symbol, period='3mo', interval='1d')
-            if df.empty:
-                return pd.DataFrame()
-            df = df[['Open','High','Low','Close','Volume']]
-            return df
-        except Exception as e_yf:
-            # Both Binance and Yahoo failed → return empty DataFrame
-            print(f"Failed to fetch data for {symbol}: Binance error: {e_binance}, Yahoo error: {e_yf}")
-            return pd.DataFrame()
+    except Exception as e:
+        print(f"Failed to fetch data for {symbol}: {e}")
+        return pd.DataFrame()
 
 # ------------------------------
 # Top 10 coins to analyze
