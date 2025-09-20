@@ -11,3 +11,4 @@ tensorflow
 opencv-python
 altair
 vega_datasets
+streamlit-autorefresh
