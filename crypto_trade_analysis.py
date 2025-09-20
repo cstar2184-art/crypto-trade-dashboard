@@ -34,12 +34,29 @@ def fetch_coingecko_data(symbol):
         return None
 
 # -----------------------------
-# Get Current Price (Binance fallback CoinGecko)
+# Fetch CoinDCX Data (fallback)
+# -----------------------------
+def fetch_coindcx_data(symbol):
+    try:
+        url = "https://api.coindcx.com/exchange/ticker"
+        response = requests.get(url, timeout=10).json()
+        pair = f"{symbol.upper()}USDT"
+        for item in response:
+            if item['market'] == pair:
+                return float(item['last_price'])
+        return None
+    except Exception:
+        return None
+
+# -----------------------------
+# Get Current Price (Binance → CoinGecko → CoinDCX)
 # -----------------------------
 def get_price(symbol):
     price = fetch_binance_data_full(symbol)['spot']
     if price is None:
         price = fetch_coingecko_data(symbol)
+    if price is None:
+        price = fetch_coindcx_data(symbol)
     return price
 
 # -----------------------------
