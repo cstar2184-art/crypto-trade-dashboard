@@ -6,3 +6,8 @@ ccxt
 ta
 mplfinance
 requests
+pillow
+tensorflow
+opencv-python
+altair
+vega_datasets
