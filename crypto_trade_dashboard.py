@@ -3,8 +3,6 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import time
-from datetime import datetime
 import requests
 import ccxt
 import yfinance as yf
@@ -12,6 +10,8 @@ from PIL import Image
 import tensorflow as tf
 from tensorflow.keras.models import load_model
 import altair as alt
+from datetime import datetime
+from streamlit_autorefresh import st_autorefresh
 
 # ======================================
 # 1️⃣ Streamlit Page Config
@@ -63,10 +63,28 @@ def fetch_coingecko_data(symbol):
     except Exception:
         return None
 
+def fetch_coindcx_data(symbol):
+    """Fetch last price from CoinDCX"""
+    try:
+        url = "https://api.coindcx.com/exchange/ticker"
+        response = requests.get(url, timeout=10).json()
+        symbol_formatted = symbol.upper() + "USDT"
+        for ticker in response:
+            if ticker["market"] == symbol_formatted:
+                return float(ticker["last_price"])
+        return None
+    except Exception:
+        return None
+
 def get_price(symbol):
+    # 1st → Binance
     price = fetch_binance_data_full(symbol)['spot']
+    # 2nd → CoinGecko
     if price is None:
         price = fetch_coingecko_data(symbol)
+    # 3rd → CoinDCX
+    if price is None:
+        price = fetch_coindcx_data(symbol)
     return price
 
 # ======================================
@@ -99,7 +117,7 @@ def build_dashboard_strength(coins):
     dashboard_data = []
     for coin in coins:
         prices = fetch_binance_data_full(coin)
-        spot_price = prices['spot'] or fetch_coingecko_data(coin)
+        spot_price = prices['spot'] or fetch_coingecko_data(coin) or fetch_coindcx_data(coin)
         futures_price = prices['futures'] or spot_price
         price_history = get_price_history(coin)
         
@@ -162,42 +180,39 @@ if uploaded_file:
 # 8️⃣ Auto-Refresh Dashboard with Visualization
 # ======================================
 st.subheader("📊 Live Market Dashboard & Top 3 Recommended Trades")
-dashboard_placeholder = st.empty()
-REFRESH_INTERVAL = 60  # seconds
 
-while True:
-    df_dashboard, df_top3 = build_dashboard_strength(COINS)
-    
-    with dashboard_placeholder.container():
-        # Top 3 Recommended Trades Table
-        st.subheader("🏆 Top 3 Recommended Trades (Strength Score)")
-        st.table(df_top3)
-        
-        # Top 3 Strength Score Visualization
-        st.subheader("📈 Top 3 Strength Score Visualization")
-        if not df_top3.empty:
-            chart = alt.Chart(df_top3).mark_bar(size=60).encode(
-                x=alt.X('Coin', sort='-y'),
-                y='Strength Score',
-                color=alt.condition(
-                    alt.datum.Strength_Score > 0,
-                    alt.value("green"),
-                    alt.value("red")
-                ),
-                tooltip=['Coin','Strength Score','Spot Signal','Futures Signal']
-            ).properties(
-                width=600,
-                height=400,
-                title="Top 3 Recommended Trades Strength"
-            )
-            st.altair_chart(chart, use_container_width=True)
-        else:
-            st.info("No recommended trades at the moment.")
-        
-        # Full Market Dashboard
-        st.subheader("📊 Full Market Dashboard")
-        st.dataframe(df_dashboard)
-        
-        st.markdown(f"Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    
-    time.sleep(REFRESH_INTERVAL)
+# 🔄 Auto refresh every 60 sec
+count = st_autorefresh(interval=60000, limit=None, key="refresh")
+
+df_dashboard, df_top3 = build_dashboard_strength(COINS)
+
+# Top 3 Recommended Trades Table
+st.subheader("🏆 Top 3 Recommended Trades (Strength Score)")
+st.table(df_top3)
+
+# Top 3 Strength Score Visualization
+st.subheader("📈 Top 3 Strength Score Visualization")
+if not df_top3.empty:
+    chart = alt.Chart(df_top3).mark_bar(size=60).encode(
+        x=alt.X('Coin', sort='-y'),
+        y='Strength Score',
+        color=alt.condition(
+            alt.datum.Strength_Score > 0,
+            alt.value("green"),
+            alt.value("red")
+        ),
+        tooltip=['Coin','Strength Score','Spot Signal','Futures Signal']
+    ).properties(
+        width=600,
+        height=400,
+        title="Top 3 Recommended Trades Strength"
+    )
+    st.altair_chart(chart, use_container_width=True)
+else:
+    st.info("No recommended trades at the moment.")
+
+# Full Market Dashboard
+st.subheader("📊 Full Market Dashboard")
+st.dataframe(df_dashboard)
+
+st.markdown(f"Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
