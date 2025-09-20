@@ -1,78 +1,69 @@
 # crypto_trade_analysis.py
 
 import pandas as pd
-import numpy as np
 import yfinance as yf
+import requests
 import ccxt
-import ta
 
-# ------------------------------
-# Fetch Binance Data
-# ------------------------------
-def fetch_binance(symbol="BTC/USDT", timeframe="1h", limit=200):
+# -----------------------------
+# Fetch Binance & Futures Data
+# -----------------------------
+def fetch_binance_data_full(symbol):
+    binance_spot = ccxt.binance()
+    binance_futures = ccxt.binance({'options': {'defaultType': 'future'}})
+    spot_price, futures_price = None, None
     try:
-        binance = ccxt.binance()
-        ohlcv = binance.fetch_ohlcv(symbol, timeframe=timeframe, limit=limit)
-        df = pd.DataFrame(ohlcv, columns=['timestamp','open','high','low','close','volume'])
-        df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
-        df.set_index('timestamp', inplace=True)
-        return df
+        spot_price = binance_spot.fetch_ticker(symbol + '/USDT')['last']
+    except Exception:
+        spot_price = None
+    try:
+        futures_price = binance_futures.fetch_ticker(symbol + '/USDT')['last']
+    except Exception:
+        futures_price = None
+    return {'spot': spot_price, 'futures': futures_price}
+
+# -----------------------------
+# Fetch CoinGecko Data
+# -----------------------------
+def fetch_coingecko_data(symbol):
+    try:
+        url = f'https://api.coingecko.com/api/v3/simple/price?ids={symbol.lower()}&vs_currencies=usd'
+        response = requests.get(url, timeout=10).json()
+        return response[symbol.lower()]['usd']
     except Exception:
         return None
 
-# ------------------------------
-# Fetch Yahoo Finance Data
-# ------------------------------
-def fetch_yfinance(symbol="BTC-USD", period="30d", interval="1h"):
-    df = yf.download(symbol, period=period, interval=interval)
-    if df.empty:
-        return None
-    df.rename(columns={"Open":"open","High":"high","Low":"low","Close":"close","Volume":"volume"}, inplace=True)
-    return df
+# -----------------------------
+# Get Current Price (Binance fallback CoinGecko)
+# -----------------------------
+def get_price(symbol):
+    price = fetch_binance_data_full(symbol)['spot']
+    if price is None:
+        price = fetch_coingecko_data(symbol)
+    return price
 
-# ------------------------------
-# Compute Indicators
-# ------------------------------
-def compute_indicators(df):
-    df['EMA9'] = df['close'].ewm(span=9, adjust=False).mean()
-    df['EMA21'] = df['close'].ewm(span=21, adjust=False).mean()
-    df['RSI'] = ta.momentum.RSIIndicator(df['close'], window=14).rsi()
-    df['MACD'] = ta.trend.MACD(df['close']).macd()
-    df['SignalLine'] = ta.trend.MACD(df['close']).macd_signal()
-    df['ATR'] = ta.volatility.AverageTrueRange(
-        df['high'], df['low'], df['close'], window=14
-    ).average_true_range()
-    df['VolSpike'] = np.where(
-        df['volume'] > df['volume'].rolling(20).mean() * 1.5, 1, 0
-    )
-    return df
+# -----------------------------
+# Get Price History for Signals
+# -----------------------------
+def get_price_history(symbol, length=30):
+    try:
+        data = yf.download(symbol+'-USDT', period='1mo', interval='1d')
+        return data['Close'].tolist()
+    except Exception:
+        price = get_price(symbol)
+        return [price]*length
 
-# ------------------------------
-# Generate Signals
-# ------------------------------
-def generate_signals(df):
-    df['Signal'] = np.where(
-        (df['EMA9'] > df['EMA21']) & (df['RSI'] < 70) & (df['VolSpike'] == 1),
-        "Buy",
-        np.where(
-            (df['EMA9'] < df['EMA21']) & (df['RSI'] > 30) & (df['VolSpike'] == 1),
-            "Short",
-            "Hold",
-        ),
-    )
-
-    df['Entry'] = df['close']
-    df['SL'] = np.where(
-        df['Signal'] == "Buy",
-        df['close'] - df['ATR'],
-        np.where(df['Signal'] == "Short", df['close'] + df['ATR'], np.nan),
-    )
-    df['TP'] = np.where(
-        df['Signal'] == "Buy",
-        df['close'] + 2 * df['ATR'],
-        np.where(df['Signal'] == "Short", df['close'] - 2 * df['ATR'], np.nan),
-    )
-
-    df['TradeType'] = np.where(df['ATR'] > df['close'] * 0.01, "Futures", "Spot")
-
-    return df
+# -----------------------------
+# Generate Buy/Short/Hold Signal
+# -----------------------------
+def generate_trade_signal(prices):
+    df = pd.DataFrame(prices, columns=['close'])
+    df['SMA5'] = df['close'].rolling(5).mean()
+    df['SMA20'] = df['close'].rolling(20).mean()
+    df['diff'] = df['SMA5'] - df['SMA20']
+    if df['diff'].iloc[-1] > 0:
+        return "Buy","Spot"
+    elif df['diff'].iloc[-1] < 0:
+        return "Short","Futures"
+    else:
+        return "Hold","-"
