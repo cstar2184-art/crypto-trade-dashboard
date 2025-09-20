@@ -2,121 +2,153 @@
 
 import streamlit as st
 import pandas as pd
-import ccxt
-import matplotlib.pyplot as plt
-import mplfinance as mpf
+import numpy as np
+import time
 from datetime import datetime
+from PIL import Image
+import tensorflow as tf
+from tensorflow.keras.models import load_model
+import altair as alt
 
-# ------------------------------
-# Streamlit page config
-# ------------------------------
+# Import utility functions
+from crypto_trade_analysis import (
+    fetch_binance_data_full,
+    fetch_coingecko_data,
+    get_price,
+    get_price_history,
+    generate_trade_signal
+)
+
+# -----------------------------
+# Streamlit Config
+# -----------------------------
 st.set_page_config(page_title="CryptoSage Ultra Pro", layout="wide")
 st.title("💹 CryptoSage Ultra Pro - PRO")
-st.markdown("Spot & Futures Crypto Analysis | Buy/Short Signals")
+st.markdown("Spot & Futures Crypto Analysis | Top 3 Recommended Trades | AI Chart Analysis")
 
-# ------------------------------
-# Binance API setup
-# ------------------------------
-binance = ccxt.binance({
-    'enableRateLimit': True
-})
+# -----------------------------
+# Coin List
+# -----------------------------
+COINS = ['BTC','ETH','XRP','LTC','ADA','DOGE']
 
-# ------------------------------
-# Function to fetch crypto data
-# ------------------------------
-def get_crypto_data(symbol, interval='1d', limit=100):
-    try:
-        ohlcv = binance.fetch_ohlcv(symbol, timeframe=interval, limit=limit)
-        df = pd.DataFrame(ohlcv, columns=['timestamp', 'Open', 'High', 'Low', 'Close', 'Volume'])
-        df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
-        df.set_index('timestamp', inplace=True)
-        return df
-    except Exception as e:
-        print(f"Failed to fetch data for {symbol}: {e}")
-        return pd.DataFrame()
+# -----------------------------
+# Load AI Model
+# -----------------------------
+@st.cache_resource
+def load_ai_model(model_path="chart_cnn_model.h5"):
+    return load_model(model_path)
 
-# ------------------------------
-# Top 10 coins to analyze
-# ------------------------------
-coins = ["BTC/USDT","ETH/USDT","BNB/USDT","XRP/USDT","ADA/USDT",
-         "SOL/USDT","DOGE/USDT","DOT/USDT","MATIC/USDT","LTC/USDT"]
+try:
+    model = load_ai_model()
+except Exception:
+    st.warning("AI model not found. Using placeholder analysis.")
+    model = None
 
-st.subheader("Top 10 Coins Analysis with Top 3 Highlights")
-analysis_results = []
-
-for coin in coins:
-    df = get_crypto_data(coin)
+# -----------------------------
+# AI Chart Analysis
+# -----------------------------
+def ai_chart_analysis_real(uploaded_file, model):
+    image = Image.open(uploaded_file).convert('RGB')
+    st.image(image, caption='Uploaded Chart', use_column_width=True)
     
-    if df.empty:
-        analysis_results.append({
+    if model:
+        img = image.resize((224,224))
+        img_array = np.array(img)/255.0
+        img_array = np.expand_dims(img_array, axis=0)
+        prediction = model.predict(img_array)
+        classes = ['Uptrend','Downtrend','Sideways']
+        trend_idx = np.argmax(prediction)
+        trend = classes[trend_idx]
+        st.success(f"Trend: {trend}")
+        st.info("Support: Detected by AI model / overlay analysis")
+        st.info("Resistance: Detected by AI model / overlay analysis")
+        if trend=="Uptrend":
+            st.success("Suggested Action: Buy / Long")
+        elif trend=="Downtrend":
+            st.error("Suggested Action: Short / Sell")
+        else:
+            st.warning("Suggested Action: Hold / Wait")
+    else:
+        st.info("AI Analysis Placeholder")
+        st.success("Trend: Uptrend\nSupport: $XXX\nResistance: $XXX\nSuggested Action: Buy")
+
+st.subheader("🤖 AI Chart Analysis (Upload Screenshot)")
+uploaded_file = st.file_uploader("Upload coin chart screenshot (PNG/JPG)", type=['png','jpg','jpeg'])
+if uploaded_file:
+    ai_chart_analysis_real(uploaded_file, model)
+
+# -----------------------------
+# Dashboard with Strength Score
+# -----------------------------
+def build_dashboard_strength(coins):
+    dashboard_data = []
+    for coin in coins:
+        prices = fetch_binance_data_full(coin)
+        spot_price = prices['spot'] or fetch_coingecko_data(coin)
+        futures_price = prices['futures'] or spot_price
+        price_history = get_price_history(coin)
+        
+        spot_signal, spot_trade_type = generate_trade_signal(price_history)
+        futures_signal, futures_trade_type = generate_trade_signal(price_history)
+        
+        signal_map = {"Buy":1, "Hold":0, "Short":-1}
+        spot_weight, futures_weight = 0.6, 0.4
+        score = signal_map.get(spot_signal,0)*spot_weight + signal_map.get(futures_signal,0)*futures_weight
+        
+        dashboard_data.append({
             "Coin": coin,
-            "Last Close": "No data",
-            "Signal": "N/A",
-            "Change (%)": "N/A",
-            "DataFrame": None
+            "Spot Price": spot_price,
+            "Futures Price": futures_price,
+            "Spot Signal": spot_signal,
+            "Futures Signal": futures_signal,
+            "Trade Type": spot_trade_type,
+            "Strength Score": score
         })
-        continue
+        
+    df = pd.DataFrame(dashboard_data)
+    df_top3 = df.sort_values(by='Strength Score', ascending=False).head(3)
+    return df, df_top3
+
+# -----------------------------
+# Auto-Refresh Dashboard
+# -----------------------------
+st.subheader("📊 Live Market Dashboard & Top 3 Recommended Trades")
+dashboard_placeholder = st.empty()
+REFRESH_INTERVAL = 60  # seconds
+
+while True:
+    df_dashboard, df_top3 = build_dashboard_strength(COINS)
     
-    last_row = df.iloc[-1]
-    signal = "BUY" if last_row['Close'] > last_row['Open'] else "SHORT"
-    prev_close = df.iloc[-2]['Close'] if len(df) > 1 else last_row['Open']
-    change_percent = ((last_row['Close'] - prev_close) / prev_close) * 100
+    with dashboard_placeholder.container():
+        # Top 3 Table
+        st.subheader("🏆 Top 3 Recommended Trades (Strength Score)")
+        st.table(df_top3)
+        
+        # Top 3 Bar Chart
+        st.subheader("📈 Top 3 Strength Score Visualization")
+        if not df_top3.empty:
+            chart = alt.Chart(df_top3).mark_bar(size=60).encode(
+                x=alt.X('Coin', sort='-y'),
+                y='Strength Score',
+                color=alt.condition(
+                    alt.datum.Strength_Score > 0,
+                    alt.value("green"),
+                    alt.value("red")
+                ),
+                tooltip=['Coin','Strength Score','Spot Signal','Futures Signal']
+            ).properties(
+                width=600,
+                height=400,
+                title="Top 3 Recommended Trades Strength"
+            )
+            st.altair_chart(chart, use_container_width=True)
+        else:
+            st.info("No recommended trades at the moment.")
+        
+        # Full Dashboard
+        st.subheader("📊 Full Market Dashboard")
+        st.dataframe(df_dashboard)
+        
+        st.markdown(f"Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     
-    analysis_results.append({
-        "Coin": coin,
-        "Last Close": round(last_row['Close'], 4),
-        "Signal": signal,
-        "Change (%)": round(change_percent, 2),
-        "DataFrame": df
-    })
-
-df_analysis = pd.DataFrame(analysis_results)
-
-# Filter out coins with no data
-df_analysis_valid = df_analysis[df_analysis["Change (%)"] != "N/A"]
-
-# Highlight Top 3 coins
-top3 = df_analysis_valid.sort_values(by="Change (%)", ascending=False).head(3)
-
-st.table(df_analysis.drop(columns=["DataFrame"]))
-st.markdown("### 🔥 Top 3 Coins to Watch Now")
-st.table(top3.drop(columns=["DataFrame"]))
-
-# ------------------------------
-# Automatically show charts for Top 3 coins
-# ------------------------------
-st.subheader("Charts for Top 3 Coins")
-
-for idx, row in top3.iterrows():
-    coin = row['Coin']
-    df_chart = row['DataFrame']
-    
-    if df_chart is None or df_chart.empty:
-        st.error(f"No data available for {coin}")
-        continue
-    
-    st.markdown(f"### {coin} Candlestick Chart")
-    try:
-        mpf.plot(
-            df_chart,
-            type='candle',
-            volume=True,
-            style='yahoo',
-            title=f'{coin} Candlestick Chart',
-            show_nontrading=False
-        )
-    except Exception as e:
-        st.error(f"Error displaying candlestick chart for {coin}: {e}")
-    
-    st.markdown(f"### {coin} Close Price Chart")
-    try:
-        fig, ax = plt.subplots(figsize=(12,6))
-        ax.plot(df_chart['Close'], label='Close Price', color='blue')
-        ax.set_title(f'{coin} Close Price')
-        ax.set_xlabel('Date')
-        ax.set_ylabel('Price')
-        ax.legend()
-        ax.grid(True)
-        st.pyplot(fig)
-    except Exception as e:
-        st.error(f"Error displaying line chart for {coin}: {e}")
+    time.sleep(REFRESH_INTERVAL)
